@@ -18,3 +18,16 @@ def test_database_url_normalization() -> None:
     assert normalize_database_url("postgres://u:p@h:5432/db") == "postgresql+psycopg://u:p@h:5432/db"
     assert normalize_database_url("postgresql://u:p@h/db") == "postgresql+psycopg://u:p@h/db"
     assert normalize_database_url("sqlite:///./x.db") == "sqlite:///./x.db"
+
+
+def test_dashboard_is_served(client: TestClient) -> None:
+    response = client.get("/dashboard")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Riverside Family Health" in response.text
+
+
+def test_root_redirects_to_dashboard(client: TestClient) -> None:
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code in (302, 307)
+    assert response.headers["location"] == "/dashboard"
