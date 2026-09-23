@@ -261,6 +261,8 @@
     return `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, "0")}s`;
   }
   const fullName = (p) => `${p.first_name} ${p.last_name}`;
+  const formatAppointment = (iso) => new Date(iso).toLocaleString([], {
+    weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
   const chip = (outcome) => el("span", { class: `chip ${outcome}`, text: outcome });
 
   // ---- Data ----
@@ -416,13 +418,21 @@
          field("Phone", patient.emergency_contact_phone && formatPhone(patient.emergency_contact_phone), true)),
       el("h3", { text: "Record" }),
       el("dl", {}, field("Registered", formatWhen(patient.created_at)), field("Last updated", formatWhen(patient.updated_at))),
-      el("h3", { text: "Calls" }),
     ];
-    const callsHolder = el("div", { class: "call-list" }, showLoading ? el("div", { class: "sub", text: "Loading calls…" }) : null);
-    $("drawer-body").replaceChildren(...details, callsHolder);
+    const loading = (what) => (showLoading ? el("div", { class: "sub", text: `Loading ${what}…` }) : null);
+    const appointmentsHolder = el("div", { class: "call-list" }, loading("appointments"));
+    const callsHolder = el("div", { class: "call-list" }, loading("calls"));
+    $("drawer-body").replaceChildren(...details, el("h3", { text: "Appointments" }), appointmentsHolder,
+                                     el("h3", { text: "Calls" }), callsHolder);
     try {
-      const calls = await getData(`/patients/${patientId}/calls`);
+      const [calls, appointments] = await Promise.all([
+        getData(`/patients/${patientId}/calls`), getData(`/patients/${patientId}/appointments`)]);
       if (state.openPatientId !== patientId) return;
+      appointmentsHolder.replaceChildren(...(appointments.length ? appointments.map((a) =>
+        el("div", { class: "call-card" },
+          el("div", { class: "name", text: formatAppointment(a.starts_at) }),
+          el("div", { class: "sub", text: [a.provider, a.reason].filter(Boolean).join(" · ") }))) :
+        [el("div", { class: "sub", text: "No appointment booked." })]));
       callsHolder.replaceChildren(...(calls.length ? calls.map((c) =>
         el("div", { class: "call-card" },
           el("div", { class: "call-meta" }, chip(c.outcome), el("span", { class: "sub", text: formatWhen(c.started_at || c.created_at) }),
@@ -430,6 +440,7 @@
           callSummary(c), transcriptBlock(c.transcript, `drawer:${c.id}`))) : [el("div", { class: "sub", text: "Added through the API, not by phone." })]));
     } catch (err) {
       callsHolder.replaceChildren(el("div", { class: "error", text: `Couldn't load calls: ${err.message}` }));
+      appointmentsHolder.replaceChildren();
     }
   }
 

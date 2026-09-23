@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,6 +24,7 @@ from app.db import Base
 from app.validators import DEFAULT_LANGUAGE, SEX_VALUES
 
 CALL_OUTCOMES = ("created", "updated", "incomplete", "failed")
+APPOINTMENT_STATUSES = ("booked", "cancelled")
 
 
 def utc_now() -> datetime:
@@ -112,3 +114,29 @@ class CallLog(TimestampMixin, Base):
     collected_data: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Appointment(TimestampMixin, Base):
+    """A first appointment booked by the voice agent (mock schedule, see services/appointments.py)."""
+
+    __tablename__ = "appointments"
+    __table_args__ = (
+        CheckConstraint(_in_list("status", APPOINTMENT_STATUSES), name="ck_appointments_status"),
+        Index("ix_appointments_patient_id", "patient_id"),
+        # One booked appointment per slot: the database settles two callers racing for the same time.
+        Index(
+            "uq_appointments_booked_slot",
+            "starts_at",
+            unique=True,
+            postgresql_where=text("status = 'booked'"),
+            sqlite_where=text("status = 'booked'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    patient_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("patients.patient_id"))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    provider: Mapped[str] = mapped_column(String(100))
+    reason: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(20), default="booked", server_default="booked")
+    vapi_call_id: Mapped[str | None] = mapped_column(String(100))

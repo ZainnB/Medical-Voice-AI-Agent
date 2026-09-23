@@ -14,16 +14,18 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app import validators
 from app.errors import NotFoundError
 from app.models import CallLog, Patient
 from app.schemas import PatientCreate, PatientUpdate, validation_error_details
+from app.services import appointments as appointment_service
 from app.services import calls as call_service
 from app.services import patients as patient_service
 
@@ -176,12 +178,87 @@ def update_patient(db: Session, args: dict[str, Any], call_log: CallLog | None) 
     return {"ok": True, "patient_id": str(patient.patient_id), "first_name": patient.first_name}
 
 
+def get_available_slots(db: Session, args: dict[str, Any], _: CallLog | None) -> ToolResult:
+    """Offer up to three open first-appointment times, optionally on a date and/or morning/afternoon."""
+    on = None
+    if args.get("preferred_date"):
+        try:
+            on = validators.parse_date(args["preferred_date"])
+        except ValueError:
+            return _field_error("preferred_date", "Preferred date must be in MM/DD/YYYY format")
+    part_of_day = args.get("part_of_day") if args.get("part_of_day") in ("morning", "afternoon") else None
+    slots = appointment_service.available_slots(db, on=on, part_of_day=part_of_day)
+    note = None
+    if not slots and (on or part_of_day):
+        slots = appointment_service.available_slots(db)
+        note = "Nothing is open at that time; these are the next available openings."
+    return {
+        "slots": [
+            {"slot_id": slot.isoformat(), "spoken": appointment_service.spoken(slot),
+             "provider": appointment_service.provider_for(slot)}
+            for slot in slots
+        ],
+        **({"note": note} if note else {}),
+    }
+
+
+def book_appointment(db: Session, args: dict[str, Any], call_log: CallLog | None) -> ToolResult:
+    """Book a slot for the patient saved on this call. Idempotent for the same slot."""
+    try:
+        patient_id = uuid.UUID(str(args.get("patient_id")))
+    except ValueError:
+        return _field_error("patient_id", "Use the patient_id returned by create_patient")
+    if call_log is not None and call_log.patient_id != patient_id:
+        return {"ok": False, "message": "Appointments can only be booked for the patient saved on this call."}
+    try:
+        patient_service.get_patient(db, patient_id)
+    except NotFoundError:
+        return _field_error("patient_id", "No patient found with that ID")
+    try:
+        starts_at = datetime.fromisoformat(str(args.get("slot_id")))
+    except ValueError:
+        starts_at = None
+    if starts_at is not None and starts_at.tzinfo is None:
+        starts_at = starts_at.replace(tzinfo=appointment_service.clinic_zone())
+    if starts_at is None or not appointment_service.is_offered_slot(starts_at):
+        return _field_error("slot_id", "That time isn't on the schedule; offer one of the options from get_available_slots")
+    try:
+        reason = validators.optional(lambda v: validators.normalize_text(v, "Reason", 200))(args.get("reason"))
+    except ValueError as exc:
+        return _field_error("reason", str(exc))
+
+    existing = appointment_service.list_appointments(db, patient_id=patient_id, upcoming_only=True, limit=1)
+    if existing:
+        same = appointment_service.as_utc(existing[0].starts_at) == appointment_service.as_utc(starts_at)
+        booked = {"spoken": appointment_service.spoken(appointment_service.as_utc(existing[0].starts_at)),
+                  "provider": existing[0].provider}
+        return {"ok": True, "appointment_id": str(existing[0].id), **booked} if same else {
+            "ok": False, "already_booked": True, **booked,
+            "message": "This patient already has an upcoming appointment.",
+        }
+    taken = {"ok": False, "slot_taken": True, "message": "That time was just taken. Offer another option."}
+    if not appointment_service.is_free(db, starts_at):
+        return taken
+    try:
+        appointment = appointment_service.book(
+            db, patient_id=patient_id, starts_at=starts_at, reason=reason,
+            vapi_call_id=call_log.vapi_call_id if call_log else None,
+        )
+    except IntegrityError:
+        db.rollback()  # another caller booked it between our check and the insert
+        return taken
+    return {"ok": True, "appointment_id": str(appointment.id), "spoken": appointment_service.spoken(starts_at),
+            "provider": appointment.provider}
+
+
 TOOLS: dict[str, Callable[[Session, dict[str, Any], CallLog | None], ToolResult]] = {
     "lookup_patient_by_phone": lookup_patient_by_phone,
     "verify_patient_identity": verify_patient_identity,
     "validate_patient": validate_patient,
     "create_patient": create_patient,
     "update_patient": update_patient,
+    "get_available_slots": get_available_slots,
+    "book_appointment": book_appointment,
 }
 SAVING_TOOLS = {"create_patient", "update_patient"}
 

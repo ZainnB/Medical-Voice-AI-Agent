@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 
-from app.api import calls, dashboard, patients, vapi
+from app.api import appointments, calls, dashboard, patients, vapi
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
 from app.errors import register_exception_handlers
@@ -62,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router)
     app.include_router(patients.router)
     app.include_router(calls.router)
+    app.include_router(appointments.router)
     app.include_router(vapi.router)
     return app
 

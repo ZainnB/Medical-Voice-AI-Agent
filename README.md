@@ -26,8 +26,10 @@ All data is fictional. Please don't give real personal information on the call.
 4. **Start over:** "Can we start over?"
 5. **Returning caller:** call again from the same phone. Riley finds your record, checks your date of
    birth, and offers to update it instead of creating a duplicate.
-6. **Spanish:** "Hablo español."
-7. **Hang up halfway:** the dashboard's *Recent calls* tab shows the call as *Incomplete*, with the
+6. **First appointment:** after registering, say yes when Riley offers to book your first appointment
+   ("Tuesday afternoon, please").
+7. **Spanish:** "Hablo español."
+8. **Hang up halfway:** the dashboard's *Recent calls* tab shows the call as *Incomplete*, with the
    transcript and everything collected so far. No partial patient is saved.
 
 Keep the dashboard open while you call: the new record appears within 10 seconds.
@@ -76,7 +78,9 @@ what's valid.
 4. She reads everything back in three short chunks and waits for a yes after each.
 5. `create_patient` (or `update_patient`) saves the record. The tool always returns HTTP 200 with a
    result Riley can read, so she never goes silent and never claims a save that didn't happen.
-6. After hang-up, Vapi posts the end-of-call report (transcript, summary, reason). It is stored in
+6. For a new patient, Riley offers a first appointment: `get_available_slots` returns up to three times
+   already phrased for speech, and `book_appointment` books the one the caller picks.
+7. After hang-up, Vapi posts the end-of-call report (transcript, summary, reason). It is stored in
    `call_logs` and linked to the patient.
 
 ## Tech stack and why
@@ -91,7 +95,7 @@ what's valid.
 | Database | **PostgreSQL** on Railway (SQLite for local dev and tests) | Real constraints, and data survives restarts and redeploys |
 | Hosting | **Railway**, always on | Serverless is off: a cold start would make Vapi's tool calls time out |
 | Dashboard | One static HTML file served by FastAPI | Nothing extra to build or deploy |
-| Tests | pytest + FastAPI TestClient | 170 tests; they run on SQLite by default and also against Postgres |
+| Tests | pytest + FastAPI TestClient | 182 tests; they run on SQLite by default and also against Postgres |
 
 ## Conversation design
 
@@ -130,6 +134,8 @@ sending the prompt to Vapi.
 | `validate_patient` | Full validation, no save | `{"ok": true, "normalized": {...}}` or `{"ok": false, "errors": [{field, message}]}` |
 | `create_patient` | Save a new patient (idempotent per call) | `{"ok": true, "patient_id", "first_name"}`, `errors`, `already_registered`, or `system_error` |
 | `update_patient` | Partial update; requires `verified_date_of_birth` | Same shapes |
+| `get_available_slots` | Up to 3 open first-appointment times (optional date, morning or afternoon) | `{"slots": [{slot_id, spoken, provider}]}` |
+| `book_appointment` | Book the chosen slot for the patient saved on this call | `{"ok": true, "spoken", "provider"}`, `slot_taken`, or `already_booked` |
 | `endCall` | Vapi built-in: hang up after the goodbye | — |
 
 ## API reference
@@ -152,6 +158,8 @@ Every response uses the same envelope:
 | DELETE | `/patients/{id}` | `X-API-Key` | 200; **soft delete**, sets `deleted_at` | 401, 404 (also if already deleted) |
 | GET | `/calls` | — | 200 call logs, newest first | — |
 | GET | `/patients/{id}/calls` | — | 200 calls linked to the patient | 404 |
+| GET | `/appointments` | — | 200 booked appointments, soonest first | — |
+| GET | `/patients/{id}/appointments` | — | 200 the patient's appointments | 404 |
 | POST | `/vapi/tools`, `/vapi/events` | Vapi secret | Always 200 for tool calls | 401 without the secret |
 
 Other status codes: unknown fields in a body are rejected with 422. Database outages return 503
@@ -213,6 +221,16 @@ arrive in either order. It stores `outcome` (`created`, `updated`, `incomplete`,
 `collected_data`: everything the agent sent to any tool during the call. That last field is how a
 dropped call still shows what was gathered.
 
+### `appointments` (bonus)
+
+`patient_id` (foreign key), `starts_at` (TIMESTAMPTZ, UTC), `provider`, `reason`, `status` (CHECK:
+`booked` or `cancelled`), and `vapi_call_id`. A **partial unique index on `starts_at` where
+`status = 'booked'`** makes double-booking impossible, even when two callers race for the same slot.
+
+The calendar itself is mock data and is generated rather than stored: weekdays over the next two weeks,
+four slots a day in the clinic's time zone, with Dr. Priya Shah in the mornings and Dr. Marcus Allen
+in the afternoons.
+
 ## Edge cases and resilience
 
 | Scenario | What happens |
@@ -228,6 +246,7 @@ dropped call still shows what was gathered.
 | Our server unreachable or times out | Vapi's configured failure message: "I'm having trouble reaching our system" |
 | Duplicate caller | Lookup by caller ID right after the name, then identity check, then update. Server-side exact-duplicate guard as a backup |
 | Date-of-birth guessing | Locked after 3 wrong attempts per call, enforced on the server |
+| Two callers want the same appointment slot | The database's partial unique index lets exactly one booking through; the other caller is offered the remaining times |
 | LLM retries a save | Idempotent per call: the retry updates the same patient |
 | Tool-call payload shape changes | The parser accepts every documented shape (flat, OpenAI-style, `toolWithToolCallList`; arguments as an object or a JSON string) |
 | Silence | Two check-ins, then a polite hang-up |
@@ -259,8 +278,8 @@ TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/db pytest       # same s
 
 `tests/test_validators.py` covers every normalization rule, `tests/test_patients_api.py` covers the
 REST API and envelope, `tests/test_vapi_webhook.py` covers the tools, payload shapes, idempotency,
-failures and the end-of-call report, and `tests/test_vapi_setup.py` keeps the Vapi config, prompt and
-server in sync.
+failures and the end-of-call report, `tests/test_appointments.py` covers scheduling and the
+double-booking race, and `tests/test_vapi_setup.py` keeps the Vapi config, prompt and server in sync.
 
 ### Deploy on Railway
 
@@ -278,7 +297,7 @@ ever falls back to SQLite.
 
 ```bash
 python scripts/vapi_setup.py --dry-run   # print the tool and assistant payloads (secret redacted)
-python scripts/vapi_setup.py             # create or update the 5 tools and the assistant, bind the number
+python scripts/vapi_setup.py             # create or update the 7 tools and the assistant, bind the number
 ```
 
 The script is idempotent: tools are matched by name and the assistant by name. **Re-run it after any
@@ -347,6 +366,7 @@ longer exists, so silence uses `customer.speech.timeout` hooks. Summaries are **
 - Alembic migrations, and authentication on read endpoints.
 - Resume a dropped call from its `collected_data` ("Welcome back, shall we pick up where we left off?").
 - Address verification (USPS or Smarty) and SMS confirmation after registration.
+- Real scheduling: provider calendars, rescheduling and cancelling by phone, and reminders.
 - A Vapi Simulations eval suite that replays the edge-case script on every prompt change.
 - Rate limiting on the webhooks and the API.
 - Replace the free Vapi number with a Twilio number for more concurrency and caller-ID reliability.
@@ -358,17 +378,17 @@ app/
   main.py              app factory, request logging, startup (create tables, seed)
   config.py            settings from environment variables
   db.py                engine, session, DATABASE_URL normalization
-  models.py            Patient, CallLog (+ CHECK constraints)
+  models.py            Patient, CallLog, Appointment (+ CHECK constraints, partial unique index)
   validators.py        every normalization and validation rule
   schemas.py           Pydantic models built from the validators; error formatting
   errors.py            exception handlers producing the {data, error} envelope
   security.py          X-API-Key and Vapi webhook secret checks
   seed.py              two fictional demo patients
   logging_config.py    JSON logs to stdout
-  services/            patients.py, calls.py, voice_tools.py (business logic)
-  api/                 patients.py, calls.py, vapi.py, dashboard.py (HTTP only)
+  services/            patients.py, calls.py, appointments.py, voice_tools.py (business logic)
+  api/                 patients.py, calls.py, appointments.py, vapi.py, dashboard.py (HTTP only)
   static/dashboard.html
 prompts/system_prompt.md   Riley's system prompt, with design comments
 scripts/vapi_setup.py      Vapi tools, assistant, and phone binding as code
-tests/                     170 pytest tests
+tests/                     182 pytest tests
 ```

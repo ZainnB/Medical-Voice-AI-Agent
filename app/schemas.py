@@ -226,6 +226,21 @@ class CallLogOut(BaseModel):
     updated_at: UtcDatetime
 
 
+class AppointmentOut(BaseModel):
+    """A booked appointment."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    patient_id: uuid.UUID
+    starts_at: UtcDatetime
+    provider: str
+    reason: str | None
+    status: str
+    vapi_call_id: str | None
+    created_at: UtcDatetime
+
+
 class ErrorDetail(BaseModel):
     field: str
     message: str

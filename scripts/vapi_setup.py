@@ -93,7 +93,7 @@ PATIENT_ID = {"type": "string", "description": "The patient_id returned by looku
 
 
 def tool_payloads(settings: SetupSettings) -> list[dict[str, Any]]:
-    """The five function tools, all pointing at /vapi/tools with the shared secret."""
+    """The function tools, all pointing at /vapi/tools with the shared secret."""
     server = {
         "url": f"{settings.public_base_url.rstrip('/')}/vapi/tools",
         "headers": {"X-Vapi-Secret": settings.vapi_webhook_secret},
@@ -161,6 +161,34 @@ def tool_payloads(settings: SetupSettings) -> list[dict[str, Any]]:
             },
             ["patient_id", "verified_date_of_birth"],
             ("One moment while I update that for you.", "Un momento mientras actualizo su información."),
+        ),
+        tool(
+            "get_available_slots",
+            "List up to three open times for a first appointment. Read each option's 'spoken' time and provider.",
+            {
+                "preferred_date": {
+                    "type": "string",
+                    "description": "Preferred date in MM/DD/YYYY (convert 'next Tuesday' using today's date). "
+                    "Omit for the next openings.",
+                },
+                "part_of_day": {"type": "string", "enum": ["morning", "afternoon"], "description": "Optional"},
+            },
+            [],
+            ("Let me check the schedule.", "Permítame revisar la agenda."),
+        ),
+        tool(
+            "book_appointment",
+            "Book the option the caller chose, for the patient saved on this call.",
+            {
+                "patient_id": {"type": "string", "description": "The patient_id returned by create_patient"},
+                "slot_id": {
+                    "type": "string",
+                    "description": "The slot_id of the chosen option, exactly as returned by get_available_slots",
+                },
+                "reason": {"type": "string", "description": "Reason for the visit if mentioned, e.g. annual checkup"},
+            },
+            ["patient_id", "slot_id"],
+            ("One moment while I book that.", "Un momento mientras reservo su cita."),
         ),
     ]
 
