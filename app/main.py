@@ -7,18 +7,23 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 
-from app.api import dashboard
+from app.api import dashboard, patients
 from app.config import get_settings
-from app.db import Base, engine
+from app.db import Base, SessionLocal, engine
+from app.errors import register_exception_handlers
 from app.logging_config import configure_logging
+from app.seed import seed_demo_patients
 
 logger = logging.getLogger("app")
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Create tables on startup (no migrations, given the time box)."""
+    """Create tables on startup (no migrations, given the time box) and optionally seed demo data."""
     Base.metadata.create_all(engine)
+    if get_settings().seed_on_startup:
+        with SessionLocal() as db:
+            seed_demo_patients(db)
     logger.info("startup_complete", extra={"fields": {"db_dialect": engine.dialect.name}})
     yield
 
@@ -51,7 +56,9 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.middleware("http")(log_requests)
+    register_exception_handlers(app)
     app.include_router(dashboard.router)
+    app.include_router(patients.router)
     return app
 
 
