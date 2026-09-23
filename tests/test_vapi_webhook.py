@@ -379,3 +379,13 @@ def test_identity_checks_lock_after_three_failures(client: TestClient, existing:
     # A different call starts with a clean slate.
     assert run(client, "verify_patient_identity", {"patient_id": existing["patient_id"],
                                                    "date_of_birth": "03/04/1990"}, call_id="call-2")["verified"] is True
+
+
+def test_summary_falls_back_to_top_level_field(client: TestClient) -> None:
+    end_of_call(client, analysis={}, summary="Top-level summary.")
+    assert calls(client)[0]["summary"] == "Top-level summary."
+
+
+def test_empty_summary_is_stored_as_null(client: TestClient) -> None:
+    end_of_call(client, analysis={}, summary="")
+    assert calls(client)[0]["summary"] is None

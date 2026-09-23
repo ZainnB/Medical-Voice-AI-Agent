@@ -161,7 +161,7 @@ def handle_end_of_call(db: Session, message: dict[str, Any]) -> None:
         vapi_call_id=context.call_id,
         caller_number=context.caller_number,
         ended_reason=message.get("endedReason") or call.get("endedReason"),
-        summary=analysis.get("summary"),
+        summary=analysis.get("summary") or message.get("summary") or call.get("summary") or None,
         transcript=_transcript(_dict(message.get("artifact")) or _dict(call.get("artifact"))),
         started_at=_parse_timestamp(message.get("startedAt") or call.get("startedAt")),
         ended_at=_parse_timestamp(message.get("endedAt") or call.get("endedAt")),

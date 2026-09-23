@@ -199,6 +199,8 @@ def assistant_payload(settings: SetupSettings, tool_ids: list[str]) -> dict[str,
         },
         "serverMessages": ["end-of-call-report", "tool-calls"],
         "maxDurationSeconds": 600,
+        # Summaries are no longer generated unless requested (verified on a live call, 2026-09-23).
+        "analysisPlan": {"summaryPlan": {"enabled": True, "timeoutSeconds": 10}},
         "backgroundSound": "off",
         "backgroundSpeechDenoisingPlan": {"smartDenoisingPlan": {"enabled": True}},
         # Callers pause while spelling names and reading digits; wait longer before replying.
