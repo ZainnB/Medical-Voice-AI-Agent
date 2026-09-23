@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -33,10 +34,10 @@ FIRST_MESSAGE = (
 class SetupSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
 
-    vapi_api_key: str
-    vapi_phone_number_id: str
-    public_base_url: str
-    vapi_webhook_secret: str
+    vapi_api_key: str = Field(min_length=1)
+    vapi_phone_number_id: str = Field(min_length=1)
+    public_base_url: str = Field(min_length=1)
+    vapi_webhook_secret: str = Field(min_length=16)  # must equal VAPI_WEBHOOK_SECRET on Railway
 
 
 class SetupError(RuntimeError):
