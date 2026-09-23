@@ -6,7 +6,11 @@ from app.db import normalize_database_url
 def test_health_ok(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"data": {"status": "ok", "db": "ok"}, "error": None}
+    data = response.json()["data"]
+    assert data["status"] == "ok"
+    assert data["db"] == "ok"
+    assert data["db_engine"] in {"sqlite", "postgresql"}
+    assert response.json()["error"] is None
 
 
 def test_database_url_normalization() -> None:

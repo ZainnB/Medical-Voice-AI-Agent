@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import engine, get_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["system"])
@@ -16,7 +16,10 @@ router = APIRouter(tags=["system"])
 
 @router.get("/health")
 def health(db: Session = Depends(get_db)) -> JSONResponse:
-    """Report service and database health. Returns 503 if the database is unreachable."""
+    """Report service and database health (and which database engine is in use).
+
+    Returns 503 if the database is unreachable.
+    """
     try:
         db.execute(text("SELECT 1"))
     except SQLAlchemyError:
@@ -24,8 +27,8 @@ def health(db: Session = Depends(get_db)) -> JSONResponse:
         return JSONResponse(
             status_code=503,
             content={
-                "data": {"status": "degraded", "db": "unreachable"},
+                "data": {"status": "degraded", "db": "unreachable", "db_engine": engine.dialect.name},
                 "error": {"code": "db_unavailable", "message": "Database is unreachable", "details": []},
             },
         )
-    return JSONResponse(content={"data": {"status": "ok", "db": "ok"}, "error": None})
+    return JSONResponse(content={"data": {"status": "ok", "db": "ok", "db_engine": engine.dialect.name}, "error": None})

@@ -24,6 +24,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     if get_settings().seed_on_startup:
         with SessionLocal() as db:
             seed_demo_patients(db)
+    if engine.dialect.name == "sqlite":
+        logger.warning("using_sqlite: data lives in a local file and will not survive a redeploy; set DATABASE_URL")
     logger.info("startup_complete", extra={"fields": {"db_dialect": engine.dialect.name}})
     yield
 
