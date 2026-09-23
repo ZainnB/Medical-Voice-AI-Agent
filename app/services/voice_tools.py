@@ -141,6 +141,17 @@ def create_patient(db: Session, args: dict[str, Any], call_log: CallLog | None) 
         except NotFoundError:
             patient = None  # deleted since; fall through to a fresh insert
     if patient is None:
+        duplicate = patient_service.find_exact_duplicate(db, data)
+        if duplicate is not None:
+            # Safety net if the agent skipped the lookup: never register the same person twice.
+            # The caller just said this exact name, DOB, and phone, so confirming it reveals nothing new.
+            return {
+                "ok": False,
+                "already_registered": True,
+                "patient_id": str(duplicate.patient_id),
+                "first_name": duplicate.first_name,
+                "message": "This patient is already registered. Offer to update their information instead.",
+            }
         patient = patient_service.create_patient(db, data, commit=False)
     if call_log is not None:
         call_service.link_patient(call_log, patient.patient_id, "created")

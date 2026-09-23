@@ -58,6 +58,18 @@ def list_patients(
     return list(db.scalars(query))
 
 
+def find_exact_duplicate(db: Session, data: PatientCreate) -> Patient | None:
+    """An active patient with the same phone, name (case-insensitive), and date of birth, if any."""
+    query = select(Patient).where(
+        Patient.deleted_at.is_(None),
+        Patient.phone_number == data.phone_number,
+        Patient.date_of_birth == data.date_of_birth,
+        func.lower(Patient.first_name) == data.first_name.lower(),
+        func.lower(Patient.last_name) == data.last_name.lower(),
+    )
+    return db.scalars(query.limit(1)).first()
+
+
 def update_patient(
     db: Session, patient_id: uuid.UUID, changes: dict[str, Any], *, commit: bool = True
 ) -> Patient:

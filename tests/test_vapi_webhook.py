@@ -389,3 +389,18 @@ def test_summary_falls_back_to_top_level_field(client: TestClient) -> None:
 def test_empty_summary_is_stored_as_null(client: TestClient) -> None:
     end_of_call(client, analysis={}, summary="")
     assert calls(client)[0]["summary"] is None
+
+
+def test_create_refuses_exact_duplicate_from_another_call(client: TestClient, existing: dict) -> None:
+    result = run(client, "create_patient", VALID_PATIENT | {"first_name": "JANE"}, call_id="call-2")
+    assert result["ok"] is False
+    assert result["already_registered"] is True
+    assert result["patient_id"] == existing["patient_id"]
+    assert len(patients(client)) == 1
+
+
+def test_family_member_sharing_a_phone_is_not_a_duplicate(client: TestClient, existing: dict) -> None:
+    result = run(client, "create_patient", VALID_PATIENT | {"first_name": "Jim", "date_of_birth": "01/02/2015"},
+                 call_id="call-2")
+    assert result["ok"] is True
+    assert len(patients(client)) == 2
