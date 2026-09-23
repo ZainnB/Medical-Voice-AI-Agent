@@ -197,7 +197,7 @@ def assistant_payload(settings: SetupSettings, tool_ids: list[str]) -> dict[str,
             "backoffPlan": {"type": "fixed", "maxRetries": 2, "baseDelaySeconds": 1},
         },
         "serverMessages": ["end-of-call-report", "tool-calls"],
-        "maxDurationSeconds": 900,
+        "maxDurationSeconds": 600,
         "backgroundSound": "off",
         "backgroundSpeechDenoisingPlan": {"smartDenoisingPlan": {"enabled": True}},
         # Callers pause while spelling names and reading digits; wait longer before replying.

@@ -43,6 +43,18 @@ def record_collected_data(call_log: CallLog, arguments: dict[str, Any]) -> None:
     call_log.collected_data = merged  # reassign (not mutate) so SQLAlchemy sees the change
 
 
+def verification_failures(call_log: CallLog) -> int:
+    """How many date-of-birth checks have failed during this call."""
+    return int((call_log.collected_data or {}).get("verification_failures", 0))
+
+
+def record_verification_failure(call_log: CallLog) -> None:
+    """Count a failed identity check (kept with the call's collected data, visible in the dashboard)."""
+    call_log.collected_data = dict(call_log.collected_data or {}) | {
+        "verification_failures": verification_failures(call_log) + 1
+    }
+
+
 def link_patient(call_log: CallLog, patient_id: uuid.UUID, outcome: str) -> None:
     """Attach the saved patient to the call. A call that created a patient stays 'created'."""
     call_log.patient_id = patient_id

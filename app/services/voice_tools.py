@@ -36,6 +36,14 @@ SYSTEM_ERROR: ToolResult = {
     "message": "The registration system is temporarily unavailable. Nothing was saved.",
 }
 MAX_LOOKUP_MATCHES = 5
+# Stops a caller from guessing birth dates against someone else's record.
+MAX_VERIFICATION_FAILURES = 3
+LOCKED: ToolResult = {
+    "ok": False,
+    "verified": False,
+    "locked": True,
+    "message": "Too many incorrect attempts. Do not try again on this call; offer to register as a new patient.",
+}
 
 
 @dataclass(frozen=True)
@@ -54,8 +62,15 @@ def _field_error(field: str, message: str) -> ToolResult:
     return {"ok": False, "errors": [{"field": field, "message": message}]}
 
 
-def _check_identity(db: Session, raw_patient_id: Any, raw_dob: Any) -> Patient | ToolResult:
-    """Return the patient if the spoken DOB matches the record, otherwise a result explaining why not."""
+def _check_identity(
+    db: Session, raw_patient_id: Any, raw_dob: Any, call_log: CallLog | None
+) -> Patient | ToolResult:
+    """Return the patient if the spoken DOB matches the record, otherwise a result explaining why not.
+
+    After MAX_VERIFICATION_FAILURES wrong dates in one call, every further check is refused.
+    """
+    if call_log is not None and call_service.verification_failures(call_log) >= MAX_VERIFICATION_FAILURES:
+        return LOCKED
     try:
         patient_id = uuid.UUID(str(raw_patient_id))
     except ValueError:
@@ -69,6 +84,8 @@ def _check_identity(db: Session, raw_patient_id: Any, raw_dob: Any) -> Patient |
     except NotFoundError:
         return _field_error("patient_id", "No patient found with that ID")
     if patient.date_of_birth != spoken_dob:
+        if call_log is not None:
+            call_service.record_verification_failure(call_log)
         return {"ok": False, "verified": False, "message": "The date of birth does not match our records"}
     return patient
 
@@ -93,9 +110,9 @@ def lookup_patient_by_phone(db: Session, args: dict[str, Any], _: CallLog | None
     }
 
 
-def verify_patient_identity(db: Session, args: dict[str, Any], _: CallLog | None) -> ToolResult:
+def verify_patient_identity(db: Session, args: dict[str, Any], call_log: CallLog | None) -> ToolResult:
     """Check the date of birth the caller gave against the record (server-side comparison)."""
-    result = _check_identity(db, args.get("patient_id"), args.get("date_of_birth"))
+    result = _check_identity(db, args.get("patient_id"), args.get("date_of_birth"), call_log)
     if isinstance(result, Patient):
         return {"ok": True, "verified": True, "patient_id": str(result.patient_id), "first_name": result.first_name}
     return result
@@ -133,7 +150,9 @@ def create_patient(db: Session, args: dict[str, Any], call_log: CallLog | None) 
 def update_patient(db: Session, args: dict[str, Any], call_log: CallLog | None) -> ToolResult:
     """Update a returning patient after re-checking identity; only the given fields change."""
     changes = dict(args)
-    identity = _check_identity(db, changes.pop("patient_id", None), changes.pop("verified_date_of_birth", None))
+    identity = _check_identity(
+        db, changes.pop("patient_id", None), changes.pop("verified_date_of_birth", None), call_log
+    )
     if not isinstance(identity, Patient):
         return identity
     try:

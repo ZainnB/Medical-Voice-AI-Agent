@@ -360,3 +360,22 @@ def test_calls_endpoint_requires_no_auth_but_writes_do(client: TestClient) -> No
     assert client.get("/calls").status_code == 200
     assert client.post("/patients", json=VALID_PATIENT).status_code == 401
     assert client.post("/patients", json=VALID_PATIENT, headers=AUTH).status_code == 201
+
+
+def test_identity_checks_lock_after_three_failures(client: TestClient, existing: dict) -> None:
+    def verify(dob: str) -> dict:
+        return run(client, "verify_patient_identity", {"patient_id": existing["patient_id"], "date_of_birth": dob})
+
+    for wrong in ("01/01/1980", "01/02/1980", "01/03/1980"):
+        assert verify(wrong)["verified"] is False
+    locked = verify("03/04/1990")  # even the right date is refused now
+    assert locked["locked"] is True
+    assert locked["verified"] is False
+    update = run(client, "update_patient", {"patient_id": existing["patient_id"],
+                                            "verified_date_of_birth": "03/04/1990", "city": "Dallas"})
+    assert update["locked"] is True
+    assert patients(client)[0]["city"] == "Austin"
+    assert calls(client)[0]["collected_data"]["verification_failures"] == 3
+    # A different call starts with a clean slate.
+    assert run(client, "verify_patient_identity", {"patient_id": existing["patient_id"],
+                                                   "date_of_birth": "03/04/1990"}, call_id="call-2")["verified"] is True
