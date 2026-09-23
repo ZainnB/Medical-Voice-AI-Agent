@@ -206,6 +206,26 @@ class PatientOut(BaseModel):
     deleted_at: UtcDatetime | None
 
 
+class CallLogOut(BaseModel):
+    """A Vapi call as recorded by the webhooks."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    vapi_call_id: str
+    patient_id: uuid.UUID | None
+    caller_number: str | None
+    outcome: str
+    ended_reason: str | None
+    summary: str | None
+    transcript: str | None
+    collected_data: dict[str, Any] | None
+    started_at: UtcDatetime | None
+    ended_at: UtcDatetime | None
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
+
+
 class ErrorDetail(BaseModel):
     field: str
     message: str

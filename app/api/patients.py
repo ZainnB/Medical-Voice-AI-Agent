@@ -92,7 +92,7 @@ def create_patient(body: PatientCreate, db: DbSession) -> Envelope[PatientOut]:
 )
 def update_patient(patient_id: str, body: PatientUpdate, db: DbSession) -> Envelope[PatientOut]:
     """Update only the fields provided. Required fields cannot be cleared. Requires X-API-Key."""
-    return _out(service.update_patient(db, parse_patient_id(patient_id), body))
+    return _out(service.update_patient(db, parse_patient_id(patient_id), body.changes()))
 
 
 @router.delete(

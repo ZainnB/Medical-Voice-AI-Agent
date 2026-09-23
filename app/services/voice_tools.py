@@ -1,0 +1,191 @@
+"""The functions the voice agent can call during a phone call (Vapi function tools).
+
+Each tool returns a small dict that is sent back to the LLM as compact JSON. Tools never
+raise: validation problems come back as {"ok": false, "errors": [...]}, and database or
+unexpected failures as {"ok": false, "system_error": true, ...}, so the agent can always
+tell the caller the truth about whether their information was saved.
+
+Identity rule for returning callers: the LLM never sees a stored date of birth. Lookup
+returns only IDs and names; the server compares the DOB the caller says (verify_patient_identity,
+and again inside update_patient).
+"""
+
+import logging
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from app import validators
+from app.errors import NotFoundError
+from app.models import CallLog, Patient
+from app.schemas import PatientCreate, PatientUpdate, validation_error_details
+from app.services import calls as call_service
+from app.services import patients as patient_service
+
+logger = logging.getLogger(__name__)
+
+ToolResult = dict[str, Any]
+SYSTEM_ERROR: ToolResult = {
+    "ok": False,
+    "system_error": True,
+    "message": "The registration system is temporarily unavailable. Nothing was saved.",
+}
+MAX_LOOKUP_MATCHES = 5
+
+
+@dataclass(frozen=True)
+class CallContext:
+    """Who is calling, as reported by Vapi. call_id is None for tool tests outside a call."""
+
+    call_id: str | None
+    caller_number: str | None
+
+
+def _errors(exc: ValidationError) -> ToolResult:
+    return {"ok": False, "errors": [d.model_dump() for d in validation_error_details(exc.errors())]}
+
+
+def _field_error(field: str, message: str) -> ToolResult:
+    return {"ok": False, "errors": [{"field": field, "message": message}]}
+
+
+def _check_identity(db: Session, raw_patient_id: Any, raw_dob: Any) -> Patient | ToolResult:
+    """Return the patient if the spoken DOB matches the record, otherwise a result explaining why not."""
+    try:
+        patient_id = uuid.UUID(str(raw_patient_id))
+    except ValueError:
+        return _field_error("patient_id", "Use the patient_id returned by lookup_patient_by_phone")
+    try:
+        spoken_dob = validators.parse_date(raw_dob)
+    except ValueError as exc:
+        return _field_error("date_of_birth", str(exc))
+    try:
+        patient = patient_service.get_patient(db, patient_id)
+    except NotFoundError:
+        return _field_error("patient_id", "No patient found with that ID")
+    if patient.date_of_birth != spoken_dob:
+        return {"ok": False, "verified": False, "message": "The date of birth does not match our records"}
+    return patient
+
+
+# ---- Tools -----------------------------------------------------------------------------------
+
+def lookup_patient_by_phone(db: Session, args: dict[str, Any], _: CallLog | None) -> ToolResult:
+    """Find active patients by phone. Returns names only, never dates of birth or other details."""
+    try:
+        phone = validators.normalize_phone(args.get("phone_number"))
+    except ValueError as exc:
+        return {"found": False, **_field_error("phone_number", str(exc))}
+    patients = patient_service.list_patients(db, phone_number=phone, limit=MAX_LOOKUP_MATCHES)
+    if not patients:
+        return {"found": False}
+    return {
+        "found": True,
+        "patients": [
+            {"patient_id": str(p.patient_id), "first_name": p.first_name, "last_name": p.last_name}
+            for p in patients
+        ],
+    }
+
+
+def verify_patient_identity(db: Session, args: dict[str, Any], _: CallLog | None) -> ToolResult:
+    """Check the date of birth the caller gave against the record (server-side comparison)."""
+    result = _check_identity(db, args.get("patient_id"), args.get("date_of_birth"))
+    if isinstance(result, Patient):
+        return {"ok": True, "verified": True, "patient_id": str(result.patient_id), "first_name": result.first_name}
+    return result
+
+
+def validate_patient(db: Session, args: dict[str, Any], _: CallLog | None) -> ToolResult:
+    """Run full validation without saving; returns normalized values or per-field errors."""
+    try:
+        data = PatientCreate.model_validate(args)
+    except ValidationError as exc:
+        return _errors(exc)
+    return {"ok": True, "normalized": data.model_dump(mode="json")}
+
+
+def create_patient(db: Session, args: dict[str, Any], call_log: CallLog | None) -> ToolResult:
+    """Validate and save a new patient. Idempotent per call: a retry updates the same record."""
+    try:
+        data = PatientCreate.model_validate(args)
+    except ValidationError as exc:
+        return _errors(exc)
+
+    patient: Patient | None = None
+    if call_log is not None and call_log.patient_id and call_log.outcome == "created":
+        try:
+            patient = patient_service.update_patient(db, call_log.patient_id, data.model_dump(), commit=False)
+        except NotFoundError:
+            patient = None  # deleted since; fall through to a fresh insert
+    if patient is None:
+        patient = patient_service.create_patient(db, data, commit=False)
+    if call_log is not None:
+        call_service.link_patient(call_log, patient.patient_id, "created")
+    return {"ok": True, "patient_id": str(patient.patient_id), "first_name": patient.first_name}
+
+
+def update_patient(db: Session, args: dict[str, Any], call_log: CallLog | None) -> ToolResult:
+    """Update a returning patient after re-checking identity; only the given fields change."""
+    changes = dict(args)
+    identity = _check_identity(db, changes.pop("patient_id", None), changes.pop("verified_date_of_birth", None))
+    if not isinstance(identity, Patient):
+        return identity
+    try:
+        update = PatientUpdate.model_validate(changes)
+    except ValidationError as exc:
+        return _errors(exc)
+    patient = patient_service.update_patient(db, identity.patient_id, update.changes(), commit=False)
+    if call_log is not None:
+        call_service.link_patient(call_log, patient.patient_id, "updated")
+    return {"ok": True, "patient_id": str(patient.patient_id), "first_name": patient.first_name}
+
+
+TOOLS: dict[str, Callable[[Session, dict[str, Any], CallLog | None], ToolResult]] = {
+    "lookup_patient_by_phone": lookup_patient_by_phone,
+    "verify_patient_identity": verify_patient_identity,
+    "validate_patient": validate_patient,
+    "create_patient": create_patient,
+    "update_patient": update_patient,
+}
+SAVING_TOOLS = {"create_patient", "update_patient"}
+
+
+def run_tool(db: Session, name: str, args: dict[str, Any], context: CallContext) -> ToolResult:
+    """Run one tool in its own transaction and always return a result (never raise)."""
+    handler = TOOLS.get(name)
+    if handler is None:
+        return {"ok": False, "message": f"Unknown tool: {name}"}
+    try:
+        call_log = None
+        if context.call_id:
+            call_log = call_service.get_or_create_call_log(db, context.call_id, context.caller_number)
+            call_service.record_collected_data(call_log, args)
+        result = handler(db, args, call_log)
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        logger.exception("tool_failed", extra={"fields": {"tool": name, "call_id": context.call_id}})
+        if name in SAVING_TOOLS:
+            _mark_save_failed(db, context, args)
+        return SYSTEM_ERROR
+
+
+def _mark_save_failed(db: Session, context: CallContext, args: dict[str, Any]) -> None:
+    """Best effort: flag the call as 'failed' (keeping what was collected) for the dashboard."""
+    if not context.call_id:
+        return
+    try:
+        call_log = call_service.get_or_create_call_log(db, context.call_id, context.caller_number)
+        call_service.record_collected_data(call_log, args)
+        if call_log.outcome == "incomplete":
+            call_log.outcome = "failed"
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
