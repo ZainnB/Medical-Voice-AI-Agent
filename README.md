@@ -9,10 +9,10 @@ every record to PostgreSQL. A REST API and a live web dashboard expose the store
 | | |
 |---|---|
 | **Phone number** | **+1 (732) 375-0415** |
-| API base URL | https://zb-medical-dashboard.up.railway.app |
-| Interactive API docs (Swagger) | https://zb-medical-dashboard.up.railway.app/docs |
-| Dashboard (refreshes every 10 s) | https://zb-medical-dashboard.up.railway.app/dashboard |
-| Health check | https://zb-medical-dashboard.up.railway.app/health |
+| API base URL | https://medical-voice-ai-agent.onrender.com |
+| Interactive API docs (Swagger) | https://medical-voice-ai-agent.onrender.com/docs |
+| Dashboard (refreshes every 10 s) | https://medical-voice-ai-agent.onrender.com/dashboard |
+| Health check | https://medical-voice-ai-agent.onrender.com/health |
 | Write API key (`X-API-Key`) | Sent with the submission. Reads need no key |
 
 All data is fictional. Please don't give real personal information on the call.
@@ -44,7 +44,7 @@ Keep the dashboard open while you call: the new record appears within 10 seconds
                 └───────────────────────────────┬─────────────────────────────────┘
                                                 │ HTTPS webhooks (X-Vapi-Secret)
                                                 ▼
-┌──────────────────────────────── FastAPI app (Railway) ─────────────────────────────────┐
+┌──────────────────────────────── FastAPI app (Render) ──────────────────────────────────┐
 │  /vapi/tools   tool calls during the call ─┐                                            │
 │  /vapi/events  end-of-call report ─────────┤                                            │
 │  /patients     REST CRUD ──────────────────┼──▶ services/ ──▶ SQLAlchemy ──▶ PostgreSQL  │
@@ -92,8 +92,8 @@ what's valid.
 | Speech-to-text | **Deepgram nova-3**, language `multi` | Accurate on names and numbers, and handles English/Spanish code-switching |
 | Voice | **ElevenLabs Flash v2.5** (`sarah`) | Low latency and multilingual, so Riley can speak Spanish |
 | Backend | **Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2, psycopg 3** | Typed, validation built in, and Swagger docs for free |
-| Database | **PostgreSQL** on Railway (SQLite for local dev and tests) | Real constraints, and data survives restarts and redeploys |
-| Hosting | **Railway**, always on | Serverless is off: a cold start would make Vapi's tool calls time out |
+| Database | **PostgreSQL** on Neon, free tier (SQLite for local dev and tests) | Real constraints, and data survives restarts and redeploys |
+| Hosting | **Render**, free web service | Costs nothing; it sleeps when idle, so wake-up is handled explicitly (see below) |
 | Dashboard | One static HTML file served by FastAPI | Nothing extra to build or deploy |
 | Tests | pytest + FastAPI TestClient | 182 tests; they run on SQLite by default and also against Postgres |
 
@@ -167,7 +167,7 @@ Other status codes: unknown fields in a body are rejected with 422. Database out
 returned.
 
 ```bash
-BASE=https://zb-medical-dashboard.up.railway.app
+BASE=https://medical-voice-ai-agent.onrender.com
 KEY=<write API key>
 
 curl "$BASE/patients?last_name=zain"
@@ -281,17 +281,28 @@ REST API and envelope, `tests/test_vapi_webhook.py` covers the tools, payload sh
 failures and the end-of-call report, `tests/test_appointments.py` covers scheduling and the
 double-booking race, and `tests/test_vapi_setup.py` keeps the Vapi config, prompt and server in sync.
 
-### Deploy on Railway
+### Deploy on Render + Neon (free)
 
-1. New Project → Deploy from GitHub repo, then add **PostgreSQL**.
-2. On the web service, set the variables below, with `DATABASE_URL=${{Postgres.DATABASE_URL}}`.
-3. Settings → Networking → Generate Domain. Leave **Serverless off**.
-4. `railway.json` sets the start command and the `/health` check; `.python-version` pins Python 3.12.
-   Tables are created on startup.
+1. Create a free **Neon** project (same region as the web service) and copy its connection string.
+2. On **Render**: New → Web Service from this repo, instance type **Free**. [`render.yaml`](render.yaml)
+   holds the build and start commands and the `/health` check; `.python-version` pins Python 3.12.
+3. Set the variables below, with `DATABASE_URL` = the Neon string. Tables are created on startup.
 
-**Persistence check:** register a patient, click **Redeploy** in Railway, then reload `/patients`: the
-record is still there. `/health` reports `"db_engine": "postgresql"`, and startup logs a warning if it
-ever falls back to SQLite.
+**Persistence check:** register a patient, click **Manual Deploy** in Render, then reload `/patients`:
+the record is still there. `/health` reports `"db_engine": "postgresql"`, and startup logs a warning if
+it ever falls back to SQLite.
+
+**Cold starts.** The free service sleeps after about 15 minutes idle and wakes on the next request
+(opening the dashboard or a phone call), which takes up to a minute. Three things keep a sleeping server
+from breaking a call:
+
+- Vapi sends a `status-update` to `/vapi/events` the moment a call connects, so the server starts waking
+  while Riley is still greeting the caller. The first tool call comes 15–30 seconds later, after the name.
+- Tool calls wait up to 45 seconds instead of 15, while Riley says "Let me check our system."
+- If the returning-caller lookup still fails, Riley keeps collecting details and retries it before the
+  readback. Nothing is buffered outside the conversation, so Riley never claims a save that didn't happen.
+
+An always-on instance (or a 5-minute uptime ping) removes the cold start entirely.
 
 ### Configure Vapi
 
@@ -308,7 +319,7 @@ same `VAPI_WEBHOOK_SECRET` as the server.
 
 | Variable | Used by | Required | Example / notes |
 |---|---|---|---|
-| `DATABASE_URL` | server | in production | Railway's `postgresql://…`, rewritten to the psycopg 3 driver automatically. Unset means local SQLite |
+| `DATABASE_URL` | server | in production | Neon's `postgresql://…`, rewritten to the psycopg 3 driver automatically. Unset means local SQLite |
 | `API_KEY` | server | yes | Long random string, required as `X-API-Key` on POST, PUT and DELETE. Writes are refused if unset |
 | `VAPI_WEBHOOK_SECRET` | server + setup script | yes | Vapi sends it as `X-Vapi-Secret` (`Authorization: Bearer` also accepted) |
 | `SEED_ON_STARTUP` | server | no | `true` adds 2 fictional patients to an empty table |
@@ -316,13 +327,13 @@ same `VAPI_WEBHOOK_SECRET` as the server.
 | `CLINIC_TIMEZONE` | server | no | `America/New_York`; defines "today" for the date-of-birth check |
 | `VAPI_API_KEY` | setup script | yes | Vapi private key; never used by the running server |
 | `VAPI_PHONE_NUMBER_ID` | setup script | yes | The number's ID in the Vapi dashboard |
-| `PUBLIC_BASE_URL` | setup script | yes | `https://zb-medical-dashboard.up.railway.app` |
+| `PUBLIC_BASE_URL` | setup script | yes | `https://medical-voice-ai-agent.onrender.com` |
 
 Secrets live only in environment variables; `.env` is gitignored and `.env.example` has placeholders.
 
 ## Observability
 
-Logs go to stdout as one JSON object per line, which Railway parses into searchable fields:
+Logs go to stdout as one JSON object per line, which Render's log viewer can search:
 
 - every request: method, path, status, latency;
 - every tool call: tool name, call ID, arguments, result;
@@ -337,7 +348,7 @@ dashboard.
 
 - **Reads are open.** Anyone with the URL can list patients, for reviewer convenience with fictional
   data. Writes need the API key. Production would need authentication on every read.
-- **No HIPAA controls.** No encryption at rest beyond Railway's defaults, no audit log, no BAA with
+- **No HIPAA controls.** No encryption at rest beyond Neon's defaults, no audit log, no BAA with
   vendors, and Vapi stores recordings and transcripts. Out of scope, as the brief says.
 - **A phone match reveals a name.** Anyone calling from a number (or claiming it) hears the name on
   file. This matches the requested "we already have a record for [First Name] [Last Name]" behaviour;

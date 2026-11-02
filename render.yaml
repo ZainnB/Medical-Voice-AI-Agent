@@ -1,0 +1,22 @@
+# Render Blueprint: the same settings as the live service (free web service + Neon Postgres).
+services:
+  - type: web
+    name: medical-voice-ai-agent
+    runtime: python
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: DATABASE_URL  # Neon connection string
+        sync: false
+      - key: API_KEY
+        sync: false
+      - key: VAPI_WEBHOOK_SECRET
+        sync: false
+      - key: SEED_ON_STARTUP
+        value: "true"

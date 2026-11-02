@@ -11,7 +11,7 @@ from scripts import vapi_setup
 def settings(monkeypatch: pytest.MonkeyPatch) -> vapi_setup.SetupSettings:
     monkeypatch.setenv("VAPI_API_KEY", "key")
     monkeypatch.setenv("VAPI_PHONE_NUMBER_ID", "phone-id")
-    monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.up.railway.app/")
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://example.onrender.com/")
     monkeypatch.setenv("VAPI_WEBHOOK_SECRET", "a-long-test-secret")
     return vapi_setup.SetupSettings()
 
@@ -28,7 +28,7 @@ def test_tool_schema_matches_patient_schema() -> None:
 
 def test_tools_post_to_the_webhook_with_the_secret(settings: vapi_setup.SetupSettings) -> None:
     for tool in vapi_setup.tool_payloads(settings):
-        assert tool["server"]["url"] == "https://example.up.railway.app/vapi/tools"
+        assert tool["server"]["url"] == "https://example.onrender.com/vapi/tools"
         assert tool["server"]["headers"] == {"X-Vapi-Secret": "a-long-test-secret"}
 
 
@@ -46,4 +46,4 @@ def test_assistant_uses_end_call_and_events_webhook(settings: vapi_setup.SetupSe
     payload = vapi_setup.assistant_payload(settings, ["t1"])
     assert payload["model"]["toolIds"] == ["t1"]
     assert {"type": "endCall"} in payload["model"]["tools"]
-    assert payload["server"]["url"] == "https://example.up.railway.app/vapi/events"
+    assert payload["server"]["url"] == "https://example.onrender.com/vapi/events"

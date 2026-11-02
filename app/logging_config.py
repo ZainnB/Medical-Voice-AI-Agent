@@ -1,4 +1,4 @@
-"""Structured logging: one JSON object per line on stdout (Railway parses these).
+"""Structured logging: one JSON object per line on stdout (Render and most hosts parse these).
 
 Usage: logger.info("tool_call", extra={"fields": {"tool": name, "ok": True}})
 """

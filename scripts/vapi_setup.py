@@ -37,7 +37,7 @@ class SetupSettings(BaseSettings):
     vapi_api_key: str = Field(min_length=1)
     vapi_phone_number_id: str = Field(min_length=1)
     public_base_url: str = Field(min_length=1)
-    vapi_webhook_secret: str = Field(min_length=16)  # must equal VAPI_WEBHOOK_SECRET on Railway
+    vapi_webhook_secret: str = Field(min_length=16)  # must equal VAPI_WEBHOOK_SECRET on the server
 
 
 class SetupError(RuntimeError):
@@ -97,7 +97,8 @@ def tool_payloads(settings: SetupSettings) -> list[dict[str, Any]]:
     server = {
         "url": f"{settings.public_base_url.rstrip('/')}/vapi/tools",
         "headers": {"X-Vapi-Secret": settings.vapi_webhook_secret},
-        "timeoutSeconds": 15,
+        # The free host sleeps when idle; the first tool call may have to wait for it to wake up.
+        "timeoutSeconds": 45,
     }
 
     def tool(name: str, description: str, properties: dict[str, Any], required: list[str],
@@ -225,7 +226,8 @@ def assistant_payload(settings: SetupSettings, tool_ids: list[str]) -> dict[str,
             # The end-of-call report is an idempotent upsert on our side, so retries are safe.
             "backoffPlan": {"type": "fixed", "maxRetries": 2, "baseDelaySeconds": 1},
         },
-        "serverMessages": ["end-of-call-report", "tool-calls"],
+        # status-update fires when the call connects, which wakes a sleeping server before the first tool call.
+        "serverMessages": ["end-of-call-report", "tool-calls", "status-update"],
         "maxDurationSeconds": 600,
         # Summaries are no longer generated unless requested (verified on a live call, 2026-09-23).
         "analysisPlan": {"summaryPlan": {"enabled": True, "timeoutSeconds": 10}},
