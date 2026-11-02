@@ -10,6 +10,7 @@ def test_health_ok(client: TestClient) -> None:
     assert data["status"] == "ok"
     assert data["db"] == "ok"
     assert data["db_engine"] in {"sqlite", "postgresql"}
+    assert "commit" in data
     assert response.json()["error"] is None
 
 

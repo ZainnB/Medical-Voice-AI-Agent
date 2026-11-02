@@ -9,6 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db import engine, get_db
 
 logger = logging.getLogger(__name__)
@@ -19,10 +20,11 @@ DASHBOARD_HTML = Path(__file__).resolve().parent.parent / "static" / "dashboard.
 
 @router.get("/health")
 def health(db: Session = Depends(get_db)) -> JSONResponse:
-    """Report service and database health (and which database engine is in use).
+    """Report service and database health, the database engine, and the deployed commit.
 
     Returns 503 if the database is unreachable.
     """
+    info = {"db_engine": engine.dialect.name, "commit": get_settings().render_git_commit or None}
     try:
         db.execute(text("SELECT 1"))
     except SQLAlchemyError:
@@ -30,11 +32,11 @@ def health(db: Session = Depends(get_db)) -> JSONResponse:
         return JSONResponse(
             status_code=503,
             content={
-                "data": {"status": "degraded", "db": "unreachable", "db_engine": engine.dialect.name},
+                "data": {"status": "degraded", "db": "unreachable", **info},
                 "error": {"code": "db_unavailable", "message": "Database is unreachable", "details": []},
             },
         )
-    return JSONResponse(content={"data": {"status": "ok", "db": "ok", "db_engine": engine.dialect.name}, "error": None})
+    return JSONResponse(content={"data": {"status": "ok", "db": "ok", **info}, "error": None})
 
 
 @router.get("/dashboard", include_in_schema=False)

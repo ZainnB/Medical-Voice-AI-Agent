@@ -281,6 +281,10 @@ REST API and envelope, `tests/test_vapi_webhook.py` covers the tools, payload sh
 failures and the end-of-call report, `tests/test_appointments.py` covers scheduling and the
 double-booking race, and `tests/test_vapi_setup.py` keeps the Vapi config, prompt and server in sync.
 
+**CI** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the suite on SQLite and Postgres 16
+for every push and pull request. On `main` it then waits until Render's `/health` reports the pushed
+commit, smoke-tests the live service, and records it under the repo's **Deployments** (`production`).
+
 ### Deploy on Render + Neon (free)
 
 1. Create a free **Neon** project (same region as the web service) and copy its connection string.

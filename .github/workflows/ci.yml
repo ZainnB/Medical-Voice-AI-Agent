@@ -1,0 +1,81 @@
+# Tests on every push and pull request (SQLite and Postgres). On main, wait for Render's
+# auto-deploy of this exact commit, smoke-test it, and record it as a GitHub deployment.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BASE_URL: https://medical-voice-ai-agent.onrender.com
+
+jobs:
+  test:
+    name: Tests (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U test" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Run tests
+        env:
+          TEST_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql://test:test@localhost:5432/test' || '' }}
+        run: pytest -q
+
+  deploy:
+    name: Verify Render deploy
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ env.BASE_URL }}/dashboard
+    steps:
+      - name: Wait for Render to serve this commit
+        # Render deploys on push by itself; this waits (up to 15 min) until /health reports this commit.
+        run: |
+          for attempt in $(seq 1 90); do
+            health=$(curl -s -m 60 "$BASE_URL/health" || true)
+            commit=$(echo "$health" | jq -r '.data.commit // empty' 2>/dev/null || true)
+            status=$(echo "$health" | jq -r '.data.status // empty' 2>/dev/null || true)
+            echo "attempt $attempt: status=${status:-none} commit=${commit:-none}"
+            if [ "$commit" = "$GITHUB_SHA" ] && [ "$status" = "ok" ]; then
+              echo "$health" | jq .
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Render did not serve $GITHUB_SHA within 15 minutes"
+          exit 1
+      - name: Smoke test
+        run: |
+          curl -sf -m 60 "$BASE_URL/health" | jq -e '.data.db_engine == "postgresql"'
+          curl -sf -m 60 -o /dev/null "$BASE_URL/dashboard"
+          curl -sf -m 60 "$BASE_URL/patients?limit=1" | jq -e '.error == null'
+          # Webhooks must reject requests without the shared secret.
+          code=$(curl -s -m 60 -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/vapi/tools" -d '{}')
+          test "$code" = "401"

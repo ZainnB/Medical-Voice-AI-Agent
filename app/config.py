@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     seed_on_startup: bool = False
     log_level: str = "INFO"
     clinic_timezone: str = "America/New_York"
+    render_git_commit: str = ""  # set by Render; /health reports it so CI can confirm the deploy
 
 
 @lru_cache
